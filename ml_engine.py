@@ -176,3 +176,16 @@ def circulant_exploration(c=sc.C_AES):
                         "SAC": e["SAC"], "BIC-SAC": e["BIC-SAC"], "S": e["S"]})
         rows.append(rec)
     return rows
+
+
+def mode1_reference_sbox(seed: int = 0, n_data: int = 1500, n_screen: int = 10000, top_k: int = 20,
+                         c: int = sc.C_AES) -> tuple[np.ndarray, np.ndarray]:
+    """S-box Mode 1 (ML-affine: Ridge + fitur struktur baris) untuk tabel pembanding Mode 2.
+    Mengembalikan (matriks affine K, S-box)."""
+    rng = np.random.default_rng(seed)
+    Ks = random_invertible_matrices(n_data, rng)
+    Y = label_matrices(Ks, c)
+    _, models, _, _ = train_and_compare(Ks, Y, "struct", ["Ridge Regression"])
+    out = ml_guided_search(models["Ridge Regression"], "struct", n_screen, top_k, rng, c)
+    K = out["matrices"][int(np.argmin(out["true"][:, 2]))]
+    return K, sc.construct_sbox(K, c)

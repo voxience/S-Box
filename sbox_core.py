@@ -226,8 +226,117 @@ def evaluate(sbox: np.ndarray, full: bool = True) -> dict:
         })
         res["SV"] = (120 - res["NL"]) + abs(0.5 - res["SAC"]) + \
                     (120 - res["BIC-NL"]) + abs(0.5 - res["BIC-SAC"])   # Eq. (20)
+        # metrik tambahan (NL seluruh 255 komponen & differential uniformity)
+        W = walsh_spectrum_all(sbox)
+        res["NL_comp"] = int(128 - np.abs(W[1:]).max() / 2)
+        res["DU"] = int(ddt(sbox)[1:].max())
+        res["SAC_std"] = float(s["matrix"].std())
+        res["SAC_maxdev"] = float(np.abs(s["matrix"] - 0.5).max())
+        res["opposite_fixed_points"] = int(np.sum(sbox == (x ^ 0xFF)))
     return res
 
 
 def sbox_to_grid(sbox: np.ndarray) -> np.ndarray:
     return np.asarray(sbox).reshape(16, 16)
+
+
+# ----------------------------------------------------------------------------
+# Evaluasi exact tervektorisasi (dipakai Mode 2 — S-box dari permutasi)
+# ----------------------------------------------------------------------------
+# PARITY[a, x] = a·x mod 2 (hasil kali dalam biner)
+PARITY = (BITS[np.arange(256)[:, None] & np.arange(256)[None, :]].sum(-1) & 1).astype(np.uint8)
+# Matriks Hadamard-Sylvester +-1:  HAD[a, x] = (-1)^(a·x)
+HAD = (1 - 2 * PARITY.astype(np.int8)).astype(np.float32)
+POPCOUNT = BITS.sum(axis=1)
+# mask output dengan tepat 2 bit = fungsi XOR dua bit output (dipakai BIC-NL / BIC-SAC)
+PAIR_MASKS = np.array([(1 << j) | (1 << k) for j in range(8) for k in range(j + 1, 8)])
+COORD_MASKS = 1 << np.arange(8)
+
+
+def walsh_spectrum_all(sbox: np.ndarray) -> np.ndarray:
+    """Spektrum Walsh seluruh fungsi komponen b·S(x), shape (256, 256): W[b, a].
+
+    W[b, a] = sum_x (-1)^(b·S(x) xor a·x). Baris b=0 trivial (W[0,0]=256).
+    Dihitung sebagai perkalian matriks HAD[:, S] @ HAD (setara 256 kali FWHT),
+    sehingga sekaligus memberi LAT penuh: LAT[a, b] = W[b, a] / 2.
+    """
+    s = np.asarray(sbox, dtype=np.int64)
+    return HAD[:, s] @ HAD          # float32, nilai bilangan bulat genap -> eksak
+
+
+def ddt(sbox: np.ndarray) -> np.ndarray:
+    """Difference Distribution Table penuh, shape (256, 256): DDT[dx, dy]."""
+    s = np.asarray(sbox, dtype=np.int64)
+    x = np.arange(256)
+    dx = np.arange(256)[:, None]
+    dy = s[None, :] ^ s[x[None, :] ^ dx]                 # (256, 256)
+    return np.bincount((dx * 256 + dy).ravel(), minlength=65536).reshape(256, 256)
+
+
+def sac_matrix(sbox: np.ndarray) -> np.ndarray:
+    """Matriks SAC 8x8: M[i, j] = P(bit output j berubah | bit input i dibalik)."""
+    s = np.asarray(sbox, dtype=np.int64)
+    x = np.arange(256)
+    diff = s[None, :] ^ s[x[None, :] ^ COORD_MASKS[:, None]]  # (8, 256)
+    return BITS[diff].mean(axis=1).astype(np.float64)           # (8, 8)
+
+
+def bic_sac_matrix(sbox: np.ndarray) -> np.ndarray:
+    """Matriks BIC-SAC 8x8 (simetris, diagonal NaN). Definisi sama dengan bic_sac()."""
+    s = np.asarray(sbox, dtype=np.int64)
+    x = np.arange(256)
+    diff = s[None, :] ^ s[x[None, :] ^ COORD_MASKS[:, None]]  # (8 input bit, 256)
+    # PARITY[pair, diff] -> (28, 8, 256); rata-rata atas x lalu atas bit input
+    vals = PARITY[PAIR_MASKS][:, diff].mean(axis=(1, 2))
+    M = np.full((8, 8), np.nan)
+    idx = 0
+    for j in range(8):
+        for k in range(j + 1, 8):
+            M[j, k] = M[k, j] = vals[idx]
+            idx += 1
+    return M
+
+
+def evaluate_full(sbox: np.ndarray, W: np.ndarray | None = None) -> dict:
+    """Evaluasi exact lengkap & cepat (vektor numpy) untuk S-box 8x8 sembarang.
+
+    Kunci hasil:
+      NL_comp  : NL minimum atas SEMUA 255 fungsi komponen b·S(x), b != 0
+      NL_coord : NL minimum 8 fungsi koordinat (definisi paper, = kunci "NL" lama)
+      DU, DAP  : differential uniformity dari DDT penuh, DAP = DU/256
+      LAP      : max |LAT| / 256 atas a, b != 0
+      SAC, SAC_std, SAC_maxdev, BIC-NL, BIC-SAC, fixed point, opposite fixed point
+    """
+    s = np.asarray(sbox, dtype=np.int64)
+    if W is None:
+        W = walsh_spectrum_all(s)
+    absW = np.abs(W[1:])                                   # buang b = 0
+    max_b = absW.max(axis=1)                               # (255,) indeks b-1
+    nl_b = 128 - max_b / 2
+    D = ddt(s)
+    du = int(D[1:].max())
+    M = sac_matrix(s)
+    B = bic_sac_matrix(s)
+    x = np.arange(256)
+    res = {
+        "bijective": is_bijective(s),
+        "balanced": is_balanced(s),
+        "NL_comp": int(nl_b.min()),
+        "NL_coord": int(nl_b[COORD_MASKS - 1].min()),
+        "BIC-NL": int(nl_b[PAIR_MASKS - 1].min()),
+        "DU": du,
+        "DAP": du / 256,
+        "LAP": float(max_b.max() / 2 / 256),
+        "SAC": float(M.mean()),
+        "SAC_std": float(M.std()),
+        "SAC_maxdev": float(np.abs(M - 0.5).max()),
+        "BIC-SAC": float(np.nanmean(B)),
+        "fixed_points": int(np.sum(s == x)),
+        "opposite_fixed_points": int(np.sum(s == (x ^ 0xFF))),
+        "_sac_matrix": M,
+        "_bicsac_matrix": B,
+    }
+    res["NL"] = res["NL_coord"]
+    res["S"] = (abs(res["SAC"] - 0.5) + abs(res["BIC-SAC"] - 0.5)) / 2
+    res["SV"] = (120 - res["NL"]) + abs(0.5 - res["SAC"]) + (120 - res["BIC-NL"]) + abs(0.5 - res["BIC-SAC"])
+    return res

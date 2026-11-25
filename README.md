@@ -7,21 +7,32 @@ dikembangkan dari jurnal:
 > *AES S-box modification uses affine matrices exploration for increased S-box strength.*
 > Nonlinear Dynamics, 113, 3869–3890. https://doi.org/10.1007/s11071-024-10414-3
 
+Aplikasi punya **dua mode**:
+
+- **Mode 1 (ML-affine, metode paper):** `B(X) = K·X⁻¹ + C` di GF(2⁸); ML memprediksi SAC/BIC-SAC dari matriks affine.
+- **Mode 2 (ML-permutasi, baru):** S-box dibangun dari **permutasi acak** dan dioptimasi dengan hill-climbing
+  yang dipandu *surrogate model* ML. Tidak memakai invers GF(2⁸), matriks affine, atau S-box AES.
+
 ## Isi aplikasi
 
 | Menu | Isi |
 |---|---|
 | 1. Ringkasan & Reproduksi Paper | Konstruksi AES S-box & S-box44, nilai NL/SAC/BIC-NL/BIC-SAC/LAP/DAP dicocokkan dengan tabel paper |
 | 2. Eksplorasi Affine Sirkulan | Metode paper: 256 matriks sirkulan → 128 valid → K44 terbaik (S = 0,00155) |
-| 3. Konstruksi S-box dengan ML | Dataset → latih KNN/RF/Ridge → saring ribuan kandidat → uji penuh top-k → bandingkan |
-| 4. Uji S-box Sendiri | Tempel/unggah 256 nilai, langsung diuji |
+| 3. Konstruksi S-box dengan ML | Mode 1: dataset → latih KNN/RF/Ridge → saring ribuan kandidat → uji penuh top-k → bandingkan |
+| 4. Uji S-box Sendiri | Tempel/unggah 256 nilai, langsung diuji (termasuk NL komponen & DU) |
+| 5. Mode 2 — Konstruksi Permutasi Berpandu ML | Hasil eksperimen offline, demo live, S-box terbaik, tabel perbandingan akhir |
 
 ## Struktur file
 
 ```
-app.py           # antarmuka Streamlit
-sbox_core.py     # GF(2^8), invers, transformasi affine, uji NL/SAC/BIC/LAP/DAP
-ml_engine.py     # dataset, fitur, model ML, pencarian berpandu ML
+app.py              # antarmuka Streamlit (menu 1–4, Tentang) + memanggil mode2_ui
+mode2_ui.py         # halaman menu 5 (Mode 2)
+sbox_core.py        # GF(2^8), invers, affine, uji NL/SAC/BIC/LAP/DAP + evaluasi exact tervektorisasi
+ml_engine.py        # Mode 1: dataset, fitur, model ML, pencarian matriks affine
+ml_permutation.py   # Mode 2: cost WHS, fitur murah, surrogate, hill-climbing, eksperimen pembanding
+run_experiment.py   # eksperimen offline Mode 2 (paralel) -> results/*.json
+results/            # mode2_results.json, best_sbox_mode2.json (dibaca aplikasi)
 requirements.txt
 ```
 
@@ -36,21 +47,19 @@ streamlit run app.py
 
 ## Upload ke Streamlit Community Cloud
 
-1. Buat repository baru di GitHub (boleh public), lalu upload keempat file di atas ke root repo.
+1. Buat repository baru di GitHub (boleh public), lalu upload semua file di atas **termasuk folder `results/`**.
    ```bash
-   git init
-   git add app.py sbox_core.py ml_engine.py requirements.txt README.md
-   git commit -m "S-box ML constructor"
-   git branch -M main
-   git remote add origin https://github.com/<username>/<nama-repo>.git
-   git push -u origin main
+   git add app.py mode2_ui.py sbox_core.py ml_engine.py ml_permutation.py run_experiment.py \
+           requirements.txt README.md results/
+   git commit -m "S-box ML constructor + Mode 2"
+   git push
    ```
 2. Buka https://share.streamlit.io → login dengan akun GitHub.
 3. Klik **Create app** → pilih **Deploy a public app from GitHub**.
 4. Isi: Repository = `<username>/<nama-repo>`, Branch = `main`, Main file path = `app.py`.
-5. Klik **Deploy**. Tunggu 1–3 menit sampai dependency terpasang. Link aplikasi `https://<nama>.streamlit.app` bisa dikumpulkan.
+5. Klik **Deploy**. Tunggu 1–3 menit sampai dependency terpasang.
 
-## Ringkasan metode & hasil
+## Mode 1 — ringkasan metode & hasil
 
 - Konstruksi: `B(X) = (K · X⁻¹ + C) mod 2`, polinomial `x⁸+x⁴+x³+x+1`, `C = 0x63`.
 - NL, BIC-NL, LAP, DAP **tidak berubah** oleh matriks affine invertible (selalu 112, 112, 0,0625, 0,015625),
@@ -67,3 +76,5 @@ streamlit run app.py
 | S-box ML (Ridge, contoh) | 112 | 0,50000 | 112 | 0,50000 | 0,0625 | 0,015625 | 0,00000 | 16,0000 |
 
 Catatan: SAC/BIC-SAC adalah rata-rata matriks; rata-rata 0,5 tidak berarti tiap entri 0,5 (lihat heatmap di aplikasi).
+
+__MODE2__

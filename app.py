@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import ml_engine as ml
+import mode2_ui
 import sbox_core as sc
 
 st.set_page_config(page_title="S-Box ML Constructor", page_icon="🔐", layout="wide")
@@ -51,8 +52,9 @@ def metrics_row(name, r):
         "S-box": name,
         "Bijektif": "✅" if r["bijective"] else "❌",
         "Balance": "✅" if r["balanced"] else "❌",
-        "NL": r["NL"], "SAC": round(r["SAC"], 5), "BIC-NL": r["BIC-NL"],
-        "BIC-SAC": round(r["BIC-SAC"], 5), "LAP": round(r["LAP"], 6), "DAP": round(r["DAP"], 6),
+        "NL (8 koordinat)": r["NL"], "NL komponen (255)": r["NL_comp"], "SAC": round(r["SAC"], 5),
+        "BIC-NL": r["BIC-NL"], "BIC-SAC": round(r["BIC-SAC"], 5), "LAP": round(r["LAP"], 6),
+        "DU": r["DU"], "DAP": round(r["DAP"], 6),
         "S (Eq.9)": round(r["S"], 6), "SV (Eq.20)": round(r["SV"], 6),
         "Fixed point": r["fixed_points"],
     }
@@ -100,15 +102,19 @@ def show_sbox_detail(sbox, name, key):
         tbl = pd.DataFrame([
             ("Bijektif", "Ya" if r["bijective"] else "Tidak", "Ya"),
             ("Balance", "Ya" if r["balanced"] else "Tidak", "Ya"),
-            ("Nonlinearity (NL)", f"{r['NL']}", "maks (112)"),
+            ("Nonlinearity (NL, min 8 bit koordinat — definisi paper)", f"{r['NL']}", "maks (112)"),
+            ("NL komponen (min 255 fungsi b·S(x))", f"{r['NL_comp']}", "maks (112)"),
             ("SAC", f"{r['SAC']:.5f}", "0.5"),
+            ("SAC std / max |dev dari 0,5|", f"{r['SAC_std']:.5f} / {r['SAC_maxdev']:.5f}", "0 / 0"),
             ("BIC-NL", f"{r['BIC-NL']}", "maks (112)"),
             ("BIC-SAC", f"{r['BIC-SAC']:.5f}", "0.5"),
             ("LAP", f"{r['LAP']:.6f}", "min"),
-            ("DAP", f"{r['DAP']:.6f}", "min"),
+            ("Differential uniformity (DU)", f"{r['DU']}", "min (4 untuk AES)"),
+            ("DAP = DU/256", f"{r['DAP']:.6f}", "min"),
             ("S (Eq. 9)", f"{r['S']:.6f}", "0"),
             ("SV (Eq. 20)", f"{r['SV']:.6f}", "16 (batas utk NL=112)"),
             ("Fixed point", f"{r['fixed_points']}", "0"),
+            ("Opposite fixed point", f"{r['opposite_fixed_points']}", "0"),
         ], columns=["Kriteria", "Nilai", "Ideal"])
         st.dataframe(tbl, hide_index=True, width="stretch")
         st.altair_chart(heatmap(r["_sac_matrix"], "Matriks SAC (baris = bit input dibalik)"), width="stretch")
@@ -125,6 +131,7 @@ page = st.sidebar.radio("Menu", [
     "2. Eksplorasi Affine Sirkulan (metode paper)",
     "3. Konstruksi S-box dengan Machine Learning",
     "4. Uji S-box Sendiri",
+    "5. Mode 2 — Konstruksi Permutasi Berpandu ML",
     "Tentang",
 ])
 st.sidebar.markdown("---")
@@ -402,6 +409,14 @@ elif page.startswith("4"):
 
 
 # ============================================================================
+# 5. Mode 2 — permutasi + optimasi berpandu ML
+# ============================================================================
+elif page.startswith("5"):
+    mode2_ui.render(C_CONST, helpers={"sbox_df": sbox_df, "heatmap": heatmap, "sbox_download": sbox_download,
+                                      "metrics_row": metrics_row, "full_eval": cached_full_eval})
+
+
+# ============================================================================
 # Tentang
 # ============================================================================
 else:
@@ -412,7 +427,9 @@ else:
 **Kriteria pengujian** (sesuai paper):
 | Kriteria | Ideal | Keterangan |
 |---|---|---|
-| Nonlinearity (NL) | maks. (120 batas teoretis, 112 untuk invers GF(2⁸)) | jarak Hamming minimum ke fungsi affine |
+| Nonlinearity (NL) | maks. (120 batas teoretis, 112 untuk invers GF(2⁸)) | jarak Hamming minimum ke fungsi affine (min 8 bit koordinat, definisi paper) |
+| NL komponen | maks. (112 untuk invers GF(2⁸)) | NL minimum atas SEMUA 255 kombinasi linear bit output b·S(x) |
+| DU | min. (4 untuk AES) | differential uniformity = entri terbesar DDT (dx ≠ 0); DAP = DU/256 |
 | SAC | 0,5 | peluang bit output berubah jika 1 bit input dibalik |
 | BIC-NL | maks. | NL dari XOR dua bit output |
 | BIC-SAC | 0,5 | SAC dari XOR dua bit output |
@@ -424,6 +441,7 @@ else:
 **Catatan:** SAC dan BIC-SAC yang dilaporkan adalah *rata-rata* matriks. Rata-rata 0,5 tidak berarti
 setiap entri bernilai 0,5 — lihat heatmap untuk sebaran per-entri.
 
-**Modul:** `sbox_core.py` (GF(2⁸), konstruksi, pengujian), `ml_engine.py` (dataset, fitur, model, pencarian),
-`app.py` (antarmuka Streamlit).
+**Modul:** `sbox_core.py` (GF(2⁸), konstruksi, pengujian), `ml_engine.py` (Mode 1: dataset, fitur, model,
+pencarian matriks affine), `ml_permutation.py` (Mode 2: permutasi + optimasi berpandu surrogate ML),
+`mode2_ui.py` (halaman Mode 2), `run_experiment.py` (eksperimen offline Mode 2), `app.py` (antarmuka Streamlit).
 """)
